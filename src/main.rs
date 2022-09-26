@@ -1,7 +1,7 @@
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
+use futures::{Sink, SinkExt, StreamExt};
 use tokio::io::AsyncWriteExt;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async, tungstenite::Error, tungstenite::Message};
 
 use reqwest::header;
 
@@ -41,6 +41,19 @@ async fn get_config() -> Result<LemansConfig> {
     Ok(config)
 }
 
+async fn run_and_keep_alive<S: Sink<Message, Error = Error> + Unpin>(
+    mut ws_write: S,
+    server_key: String,
+) -> Result<()> {
+    ws_write
+        .send(Message::Text(format!("START {}", server_key,)))
+        .await?;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        ws_write.send(Message::Ping(vec![1])).await?;
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let lemans_config = get_config().await?;
@@ -59,18 +72,27 @@ async fn main() -> Result<()> {
 
     let (ws_stream, _) = connect_async(wss_url).await?;
 
-    let (mut ws_write, ws_read) = ws_stream.split();
+    let (ws_write, ws_read) = ws_stream.split();
 
-    ws_write
-        .send(Message::Text(format!(
-            "START {}",
-            live_server_config.live_server_key
-        )))
-        .await?;
+    tokio::spawn(async {
+        run_and_keep_alive(ws_write, live_server_config.live_server_key)
+            .await
+            .expect("Failed to run")
+    });
     ws_read
         .for_each(|message| async {
-            let data = message.expect("Failed decoding data").into_data();
-            tokio::io::stdout().write_all(&data).await.unwrap();
+            #[allow(clippy::match_single_binding)]
+            match message.expect("Failed reading message") {
+                // uncomment to see pongs
+                // Message::Pong(_) => tokio::io::stdout()
+                //     .write_all("Pong\n".as_bytes())
+                //     .await
+                //     .unwrap(),
+                msg => tokio::io::stdout()
+                    .write_all(&msg.into_data())
+                    .await
+                    .unwrap(),
+            }
         })
         .await;
 
