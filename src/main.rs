@@ -50,7 +50,7 @@ async fn run_and_keep_alive<S: Sink<Message, Error = Error> + Unpin>(
         .await?;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        ws_write.send(Message::Ping(vec![1])).await?;
+        ws_write.send(Message::Ping(vec![])).await?;
     }
 }
 
@@ -88,10 +88,13 @@ async fn main() -> Result<()> {
                 //     .write_all("Pong\n".as_bytes())
                 //     .await
                 //     .unwrap(),
-                msg => tokio::io::stdout()
-                    .write_all(&msg.into_data())
-                    .await
-                    .unwrap(),
+                msg => {
+                    let mut data = msg.into_data();
+                    if !data.is_empty() {
+                        data.extend_from_slice("\n".as_bytes());
+                        tokio::io::stdout().write_all(&data).await.unwrap();
+                    }
+                }
             }
         })
         .await;
